@@ -16,37 +16,36 @@ M = 256
 MASK = (1 << 64) - 1
 
 
-# Hybrid composition of two byte-local bijections P then Q.
-# Tests whether composing structures from different families changes the
-# representation cost (it should not for pure bijections — verify).
+# Composition of two index-only byte laws P then Q (both from different
+# families). Tests closure: composition of non-representing laws still
+# represents nothing — and verifies the lab counts it that way.
 PNAME = 'rev'
 QNAME = 'affine'
 
 PS = {
-    "affine": lambda x, s=(3, 5): (s[0] * x + s[1]) % M,
-    "xor": lambda x, s=0x5A: x ^ s,
-    "rot": lambda x, s=3: ((x << s) | (x >> (8 - s))) & 255,
-    "gray": lambda x, s=None: x ^ (x >> 1),
-    "rev": lambda x, s=None: int(bin(x)[2:].zfill(8)[::-1], 2),
-    "nib": lambda x, s=None: ((x << 4) | (x >> 4)) & 255,
+    "affine": lambda x: (3 * x + 5) % M,
+    "xor": lambda x: x ^ 0x5A,
+    "rot": lambda x: ((x << 3) | (x >> 5)) & 255,
+    "gray": lambda x: x ^ (x >> 1),
+    "rev": lambda x: int(bin(x)[2:].zfill(8)[::-1], 2),
+    "nib": lambda x: ((x << 4) | (x >> 4)) & 255,
 }
 
-def _mk(name):
-    return PS[name]
 
 def analyze(INPUT, PARAMETERS):
-    return {"p": PNAME, "q": QNAME, "size": len(INPUT),
-            "data_b64": __import__("base64").b64encode(INPUT).decode()}
+    return {{"p": PNAME, "q": QNAME, "size": len(INPUT)}}
+
+
+def _val(n):
+    x = n & 0xFF
+    return PS[QNAME](PS[PNAME](x))
+
 
 def reconstruct(STATE, SIZE, PARAMETERS):
-    import base64
-    d = base64.b64decode(STATE["data_b64"])
-    f = _mk(STATE["p"]); g = _mk(STATE["q"])
-    return bytes(g(f(x)) for x in d)[:SIZE]
+    abc_formula.ops(SIZE * 2)
+    return bytes(_val(n) for n in range(SIZE))
+
 
 def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    import base64
-    abc_formula.ops(LENGTH)
-    d = base64.b64decode(STATE["data_b64"])
-    f = _mk(STATE["p"]); g = _mk(STATE["q"])
-    return bytes(g(f(x)) for x in d[OFFSET:OFFSET + LENGTH])
+    abc_formula.ops(LENGTH * 2)
+    return bytes(_val(OFFSET + i) for i in range(LENGTH))

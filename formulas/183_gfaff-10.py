@@ -15,9 +15,9 @@ import abc_formula                 # noqa: E710,E402
 M = 256
 MASK = (1 << 64) - 1
 
-
 ROWS = [64, 19, 133, 130, 89, 44, 35, 23]
 OFF = 198
+
 
 def _apply(x):
     r = 0
@@ -26,22 +26,20 @@ def _apply(x):
             r ^= rw
     return r ^ OFF
 
+
 MAP = [_apply(i) for i in range(256)]
-INV = [0]*256
-for _i, _v in enumerate(MAP):
-    INV[_v] = _i
+
 
 def analyze(INPUT, PARAMETERS):
-    return {"size": len(INPUT),
-            "data_b64": __import__("base64").b64encode(INPUT).decode()}
+    # pure linear-algebra law over GF(2)^8 applied to the index byte
+    return {"size": len(INPUT)}
+
 
 def reconstruct(STATE, SIZE, PARAMETERS):
-    import base64
-    d = base64.b64decode(STATE["data_b64"])
-    return bytes(MAP[x] for x in d)[:SIZE]
+    abc_formula.ops(SIZE * 8)
+    return bytes(MAP[n & 0xFF] for n in range(SIZE))
+
 
 def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    import base64
-    abc_formula.ops(LENGTH)
-    d = base64.b64decode(STATE["data_b64"])
-    return bytes(MAP[x] for x in d[OFFSET:OFFSET + LENGTH])
+    abc_formula.ops(LENGTH * 8)
+    return bytes(MAP[(OFFSET + i) & 0xFF] for i in range(LENGTH))

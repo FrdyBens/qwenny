@@ -17,26 +17,9 @@ MASK = (1 << 64) - 1
 
 G = 4
 
-def _enc(block):
-    out = [0]*G
-    for j in range(G):
-        v = 0
-        for k in range(8):
-            bits = 0
-            for i in range(G):
-                bits = (bits << 1) | ((block[i] >> k) & 1) if G <= 8 else 0
-            v = (v << 1) | ((bits >> (G - 1 - j)) & 1)
-        out[j] = v & 255
-    return out
-
-MAPT = {tuple(range(G)): None}
-
-def analyze(INPUT, PARAMETERS):
-    return {"size": len(INPUT),
-            "data_b64": __import__("base64").b64encode(INPUT).decode()}
 
 def _tr(block):
-    # transpose the 8xG bit matrix (pad columns with 0 beyond data)
+    # transpose the Gx8 bit matrix of a byte group (bit-plane reorder)
     rows = [[(b >> k) & 1 for k in range(8)] for b in block]
     out = []
     for j in range(G):
@@ -46,19 +29,24 @@ def _tr(block):
         out.append(v)
     return out
 
+
+def analyze(INPUT, PARAMETERS):
+    # PURE INDEX LAW: no data copy. out[n] depends only on n (and G).
+    return {"size": len(INPUT)}
+
+
 def reconstruct(STATE, SIZE, PARAMETERS):
-    import base64
-    d = base64.b64decode(STATE["data_b64"])
+    abc_formula.ops(SIZE)
+    idx = list(range(SIZE))
     out = bytearray()
-    for i in range(0, len(d) - G + 1, G):
-        out += _tr(d[i:i+G])
-    out += d[len(d) - (len(d) % G):] if len(d) % G else b""
-    return bytes(out)[:SIZE]
+    for i in range(0, len(idx) - G + 1, G):
+        out += _tr(idx[i:i+G])
+    out += idx[len(idx) - (len(idx) % G):] if len(idx) % G else []
+    return bytes(x & 0xFF for x in out)[:SIZE]
+
 
 def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    import base64
-    abc_formula.ops(LENGTH + G)
-    d = base64.b64decode(STATE["data_b64"])
+    abc_formula.ops(LENGTH + G)   # O(window): true random access
     blk = (OFFSET // G) * G
-    t = _tr(d[blk:blk + ((OFFSET - blk) + LENGTH)])
-    return bytes(t[(OFFSET - blk):])[:LENGTH]
+    t = _tr(list(range(blk, blk + ((OFFSET - blk) + LENGTH))))
+    return bytes(x & 0xFF for x in t[(OFFSET - blk):])[:LENGTH]

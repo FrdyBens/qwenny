@@ -19,21 +19,25 @@ MASK = (1 << 64) - 1
 A = 3
 B = 0
 
+
+def _f(x):
+    return (A * x + B) % M
+
+
 def analyze(INPUT, PARAMETERS):
-    # Tests: can b[n] = A*INPUT[n]+B mod 256 represent data? (It cannot
-    # shrink it — this measures how much structure real files give away.)
+    # Pure law byte(n) = f(INPUT[n]) mod 256. State carries ONLY the law
+    # parameters — no data copy. Therefore reconstruction of the ORIGINAL
+    # is impossible unless f is identity; the runner measures exactly how
+    # wrong it is (BER / first mismatch). This is the honest experiment.
     inv = pow(A, -1, M) if A % 2 and A else None
-    return {"a": A, "b": B, "inv": inv, "size": len(INPUT),
-            "data_b64": __import__("base64").b64encode(INPUT).decode()}
+    return {"a": A, "b": B, "inv": inv, "size": len(INPUT)}
+
 
 def reconstruct(STATE, SIZE, PARAMETERS):
-    import base64
-    d = base64.b64decode(STATE["data_b64"])
-    return bytes((STATE["a"] * x + STATE["b"]) % M for x in d)[:SIZE]
+    abc_formula.ops(SIZE)
+    return bytes(_f(n & 0xFF) for n in range(SIZE))
+
 
 def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    import base64
     abc_formula.ops(LENGTH)
-    d = base64.b64decode(STATE["data_b64"])
-    return bytes((STATE["a"] * x + STATE["b"]) % M
-                 for x in d[OFFSET:OFFSET + LENGTH])
+    return bytes(_f((OFFSET + i) & 0xFF) for i in range(LENGTH))

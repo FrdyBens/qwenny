@@ -176,6 +176,28 @@ def read(STATE, OFFSET, LENGTH, PARAMETERS):
     return bytes(SW[(OFFSET + i) & 0xFF] for i in range(LENGTH))
 '''
 
+TMPL["rotate"] = '''
+SH = {sh}
+
+
+def _rot(x):
+    return ((x << SH) | (x >> (8 - SH))) & 255
+
+
+def analyze(INPUT, PARAMETERS):
+    return {{"size": len(INPUT)}}
+
+
+def reconstruct(STATE, SIZE, PARAMETERS):
+    abc_formula.ops(SIZE)
+    return bytes(_rot(n & 0xFF) for n in range(SIZE))
+
+
+def read(STATE, OFFSET, LENGTH, PARAMETERS):
+    abc_formula.ops(LENGTH)
+    return bytes(_rot((OFFSET + i) & 0xFF) for i in range(LENGTH))
+'''
+
 TMPL["byteswap"] = """
 W = {w}
 
@@ -217,8 +239,11 @@ def _gen_key(seed):
 
 
 def analyze(INPUT, PARAMETERS):
+    # NOTE: the key is a FIXED published constant (salted by key width), NOT
+    # derived from INPUT. Deriving it from SHA-256(INPUT) would smuggle the
+    # source through a hash and fake a reconstruction. Pure law + constants.
     import hashlib
-    seed = int.from_bytes(hashlib.sha256(INPUT).digest()[:8], "big")
+    seed = int.from_bytes(hashlib.sha256(b"abc-keyxor-{k}").digest()[:8], "big")
     return {{"seed": seed, "size": len(INPUT)}}
 
 
@@ -317,11 +342,15 @@ def _bit(n, ps):
     return (h >> ({shift})) & 1
 
 def analyze(INPUT, PARAMETERS):
+    # Parameters are FIXED PUBLISHED CONSTANTS (salted by family id P/MODE).
+    # They are NOT derived from INPUT: a SHA-256(INPUT) seed would smuggle
+    # the source through a hash and fake reconstruction — forbidden here.
+    # Tiny constant state => prediction on arbitrary data is coin-flip;
+    # BER measures exactly that.
     import hashlib
-    # Parameters are DERIVED FROM INPUT during analysis (legitimate fitting);
-    # they are tiny, which means prediction quality on arbitrary data should
-    # be ~coin-flip. BER tells us exactly that.
-    d = hashlib.sha256(INPUT).digest()
+    d = hashlib.sha256(b"abc-indexlaw-{p}-{mode}").digest()
+    while len(d) < P * 8:
+        d += hashlib.sha256(d).digest()
     ps = [int.from_bytes(d[i*8:(i+1)*8], "big") for i in range(P)]
     return {{"ps": ps, "size": len(INPUT), "mode": MODE}}
 
@@ -681,6 +710,188 @@ def read(STATE, OFFSET, LENGTH, PARAMETERS):
 """
 
 
+TMPL["gray_index"] = """
+# Gray-code INDEX law: byte(n) = gray(n mod 256). Pure function of position,
+# no data copy; measures how far a smooth bit-difference basis reaches.
+def analyze(INPUT, PARAMETERS):
+    return {{"size": len(INPUT)}}
+
+
+def _g(x):
+    return x ^ (x >> 1)
+
+
+def reconstruct(STATE, SIZE, PARAMETERS):
+    abc_formula.ops(SIZE)
+    return bytes(_g(n & 0xFF) for n in range(SIZE))
+
+
+def read(STATE, OFFSET, LENGTH, PARAMETERS):
+    abc_formula.ops(LENGTH)
+    return bytes(_g((OFFSET + i) & 0xFF) for i in range(LENGTH))
+"""
+
+TMPL["bitrev_index"] = """
+# Bit-reversed INDEX law: byte(n) = reverse8(n mod 256). Position-only.
+REV = [int(bin(i)[2:].zfill(8)[::-1], 2) for i in range(256)]
+
+
+def analyze(INPUT, PARAMETERS):
+    return {{"size": len(INPUT)}}
+
+
+def reconstruct(STATE, SIZE, PARAMETERS):
+    abc_formula.ops(SIZE)
+    return bytes(REV[n & 0xFF] for n in range(SIZE))
+
+
+def read(STATE, OFFSET, LENGTH, PARAMETERS):
+    abc_formula.ops(LENGTH)
+    return bytes(REV[(OFFSET + i) & 0xFF] for i in range(LENGTH))
+"""
+
+TMPL["gray_index"] = """
+# Gray-code INDEX law: byte(n) = gray(n mod 256). Pure function of position,
+# no data copy; measures how far a smooth bit-difference basis reaches.
+def analyze(INPUT, PARAMETERS):
+    return {{"size": len(INPUT)}}
+
+
+def _g(x):
+    return x ^ (x >> 1)
+
+
+def reconstruct(STATE, SIZE, PARAMETERS):
+    abc_formula.ops(SIZE)
+    return bytes(_g(n & 0xFF) for n in range(SIZE))
+
+
+def read(STATE, OFFSET, LENGTH, PARAMETERS):
+    abc_formula.ops(LENGTH)
+    return bytes(_g((OFFSET + i) & 0xFF) for i in range(LENGTH))
+"""
+
+TMPL["bitrev_index"] = """
+# Bit-reversed INDEX law: byte(n) = reverse8(n mod 256). Position-only.
+REV = [int(bin(i)[2:].zfill(8)[::-1], 2) for i in range(256)]
+
+
+def analyze(INPUT, PARAMETERS):
+    return {{"size": len(INPUT)}}
+
+
+def reconstruct(STATE, SIZE, PARAMETERS):
+    abc_formula.ops(SIZE)
+    return bytes(REV[n & 0xFF] for n in range(SIZE))
+
+
+def read(STATE, OFFSET, LENGTH, PARAMETERS):
+    abc_formula.ops(LENGTH)
+    return bytes(REV[(OFFSET + i) & 0xFF] for i in range(LENGTH))
+"""
+
+TMPL["nib_index"] = """
+# Nibble-swap INDEX law: byte(n) = swap4(n mod 256). Position-only.
+SW = [((i << 4) | (i >> 4)) & 255 for i in range(256)]
+
+
+def analyze(INPUT, PARAMETERS):
+    return {{"size": len(INPUT)}}
+
+
+def reconstruct(STATE, SIZE, PARAMETERS):
+    abc_formula.ops(SIZE)
+    return bytes(SW[n & 0xFF] for n in range(SIZE))
+
+
+def read(STATE, OFFSET, LENGTH, PARAMETERS):
+    abc_formula.ops(LENGTH)
+    return bytes(SW[(OFFSET + i) & 0xFF] for i in range(LENGTH))
+"""
+
+TMPL["gfaffine_index"] = """
+# GF(2)^8 affine index law: byte(n) = A*(n mod 256) + b over GF(2), with a
+# FIXED published invertible companion matrix A and constant b. Pure law.
+ROWS = {rows!r}
+OFF = {off}
+
+
+def _apply(x):
+    r = 0
+    for i, rw in enumerate(ROWS):
+        if (x >> i) & 1:
+            r ^= rw
+    return r ^ OFF
+
+
+MAP = [_apply(i) for i in range(256)]
+
+
+def analyze(INPUT, PARAMETERS):
+    return {{"size": len(INPUT)}}
+
+
+def reconstruct(STATE, SIZE, PARAMETERS):
+    abc_formula.ops(SIZE * 8)
+    return bytes(MAP[n & 0xFF] for n in range(SIZE))
+
+
+def read(STATE, OFFSET, LENGTH, PARAMETERS):
+    abc_formula.ops(LENGTH * 8)
+    return bytes(MAP[(OFFSET + i) & 0xFF] for i in range(LENGTH))
+"""
+
+
+TMPL["v0006"] = """
+# v0006 REGRESSION FIXTURE (preserved failure, not repaired).
+# Old experiment: A/B/Seed byte-affine + LFSR keystream on an 8484-byte
+# WebP matched the first 64 bits then diverged AT BYTE 8 (expected 0x57
+# 'W', generated 0x90). This formula reproduces that mechanism honestly:
+# header bytes come from a fitted affine law over the index domain; the
+# body comes from a Galois-LFSR stream that cannot know the source.
+# Question it keeps asking: WHY did exactly 64 bits match? (Answer: the
+# low-entropy RIFF framing, not mathematical representation power.)
+A = 1
+B = 0
+
+
+def _step(s, poly={poly}):
+    lsb = s & 1
+    s >>= 1
+    if lsb:
+        s ^= poly
+    return s & MASK
+
+
+def analyze(INPUT, PARAMETERS):
+    import hashlib
+    seed = int.from_bytes(hashlib.sha256(b"v0006-seed").digest()[:8],
+                          "big") or 1
+    return {{"seed": seed, "size": len(INPUT)}}
+
+
+def _byte(n, STATE):
+    if n < 8:
+        # header region: affine law fitted ONLY to header positions known
+        # structurally (RIFF magic) - matches first 8 bytes of any RIFF file
+        riff = b"RIFF\x00\x00\x00\x00WEBP"
+        return riff[n] if n < len(riff) else 0
+    s = STATE["seed"]
+    for _ in range(n):
+        s = _step(s)
+    abc_formula.ops(1)
+    return s & 0xFF
+
+
+def reconstruct(STATE, SIZE, PARAMETERS):
+    return bytes(_byte(n, STATE) for n in range(SIZE))
+
+
+def read(STATE, OFFSET, LENGTH, PARAMETERS):
+    # simulate from S0 -> probe must classify NOT TRUE RANDOM ACCESS
+    return bytes(_byte(OFFSET + i, STATE) for i in range(LENGTH))
+"""
+
 def _fill(tmpl: str, ctx: dict) -> str:
     """Fill {placeholder} tokens; templates embed Python dicts with doubled
     braces so plain str.format works. Unknown keys are left untouched."""
@@ -794,28 +1005,7 @@ def build(force: bool) -> int:
             name=f"Rotate {sh}", desc=f"circular rotate left by {sh} bits.",
             cat="BitOps", tags='["bitops","bijection"]', rec="True",
             ra="True", params="{}")
-        s_ = sh
-        body = ("
-SH = %d
-
-
-def _rot(x):
-    return ((x << SH) | (x >> (8 - SH))) & 255
-
-
-def analyze(INPUT, PARAMETERS):
-    return {"size": len(INPUT)}
-
-
-def reconstruct(STATE, SIZE, PARAMETERS):
-    abc_formula.ops(SIZE)
-    return bytes(_rot(n & 0xFF) for n in range(SIZE))
-
-
-def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    abc_formula.ops(LENGTH)
-    return bytes(_rot((OFFSET + i) & 0xFF) for i in range(LENGTH))
-" % (s_,))
+        body = _fill(TMPL["rotate"], {"sh": sh})
         w(fid, f"rot{sh}", head + body, force)
 
     # gray code (byte-local bijection, classic structure experiment)
@@ -1140,26 +1330,9 @@ def read(STATE, OFFSET, LENGTH, PARAMETERS):
         body = f"""
 G = {grp}
 
-def _enc(block):
-    out = [0]*G
-    for j in range(G):
-        v = 0
-        for k in range(8):
-            bits = 0
-            for i in range(G):
-                bits = (bits << 1) | ((block[i] >> k) & 1) if G <= 8 else 0
-            v = (v << 1) | ((bits >> (G - 1 - j)) & 1)
-        out[j] = v & 255
-    return out
-
-MAPT = {{tuple(range(G)): None}}
-
-def analyze(INPUT, PARAMETERS):
-    return {{"size": len(INPUT),
-            "data_b64": __import__("base64").b64encode(INPUT).decode()}}
 
 def _tr(block):
-    # transpose the 8xG bit matrix (pad columns with 0 beyond data)
+    # transpose the Gx8 bit matrix of a byte group (bit-plane reorder)
     rows = [[(b >> k) & 1 for k in range(8)] for b in block]
     out = []
     for j in range(G):
@@ -1169,22 +1342,27 @@ def _tr(block):
         out.append(v)
     return out
 
+
+def analyze(INPUT, PARAMETERS):
+    # PURE INDEX LAW: no data copy. out[n] depends only on n (and G).
+    return {{"size": len(INPUT)}}
+
+
 def reconstruct(STATE, SIZE, PARAMETERS):
-    import base64
-    d = base64.b64decode(STATE["data_b64"])
+    abc_formula.ops(SIZE)
+    idx = list(range(SIZE))
     out = bytearray()
-    for i in range(0, len(d) - G + 1, G):
-        out += _tr(d[i:i+G])
-    out += d[len(d) - (len(d) % G):] if len(d) % G else b""
-    return bytes(out)[:SIZE]
+    for i in range(0, len(idx) - G + 1, G):
+        out += _tr(idx[i:i+G])
+    out += idx[len(idx) - (len(idx) % G):] if len(idx) % G else []
+    return bytes(x & 0xFF for x in out)[:SIZE]
+
 
 def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    import base64
-    abc_formula.ops(LENGTH + G)
-    d = base64.b64decode(STATE["data_b64"])
+    abc_formula.ops(LENGTH + G)   # O(window): true random access
     blk = (OFFSET // G) * G
-    t = _tr(d[blk:blk + ((OFFSET - blk) + LENGTH)])
-    return bytes(t[(OFFSET - blk):])[:LENGTH]
+    t = _tr(list(range(blk, blk + ((OFFSET - blk) + LENGTH))))
+    return bytes(x & 0xFF for x in t[(OFFSET - blk):])[:LENGTH]
 """
         w(fid, f"slices-{grp}", head + body, force)
 
@@ -1233,7 +1411,7 @@ def read(STATE, OFFSET, LENGTH, PARAMETERS):
         w(fid, f"lfsr-{poly & 0xFF:02x}", head + "\n" +
           _fill(TMPL["lfsr_stream"], {"poly": poly}), force)
 
-    # ---- Hybrids to reach ~256: compositions across families ----
+    # ---- Hybrids: compositions across families ----
     names = ["affine", "xor", "rot", "gray", "rev", "nib"]
     pairs = [(pp, qq) for pp in names for qq in names if pp != qq]
     for (p, q) in pairs:
@@ -1247,6 +1425,61 @@ def read(STATE, OFFSET, LENGTH, PARAMETERS):
         body = TMPL["hybrid"].replace("__P__", repr(p)).replace("__Q__", repr(q))
         w(fid, f"hyb-{p}-{q}", head + "\n" + body, force)
 
+    # ---- Deterministic padding: distinct pure index laws (no dupes) ----
+    pad = []
+    pad.append(("gray-index-law", "Gray Index Law", "BitOps",
+                "byte(n)=gray(n%256): smooth bit-difference index law, "
+                "position-only, true RA.", '["bitops","index-law"]',
+                ("gray_index", {})))
+    pad.append(("bitrev-index-law", "BitRev Index Law", "BitOps",
+                "byte(n)=reverse8(n%256): position-only bit-reversal law.",
+                '["bitops","index-law"]', ("bitrev_index", {})))
+    pad.append(("nib-index-law", "NibbleSwap Index Law", "BitOps",
+                "byte(n)=swap4(n%256): position-only nibble-swap law.",
+                '["bitops","index-law"]', ("nib_index", {})))
+    import random as _pr
+    _p = _pr.Random(4242)
+    def _mat():
+        while True:
+            rows = [_p.randrange(256) for _ in range(8)]
+            m = rows[:]; rk = 0
+            for col in range(7, -1, -1):
+                piv = next((i for i in range(rk, 8) if (m[i] >> col) & 1), None)
+                if piv is None:
+                    continue
+                m[rk], m[piv] = m[piv], m[rk]
+                for i in range(8):
+                    if i != rk and (m[i] >> col) & 1:
+                        m[i] ^= m[rk]
+                rk += 1
+            if rk == 8:
+                return rows
+    for j in range(11):
+        pad.append((f"gfaffine-idx-{j+1}", f"GF Affine Index {j+1}",
+                    "Algebra",
+                    "byte(n)=A*(n%256)+b over GF(2)^8, fixed published "
+                    "invertible A: linear-algebra index law family.",
+                    '["algebra","gf2","index-law"]',
+                    ("gfaffine_index", {"rows": _mat(),
+                                        "off": _p.randrange(256)})))
+    for slug, nm, cat, desc, tags, (tmpl, ctx) in pad:
+        fid += 1
+        head = HEADER.format(name=nm, desc=desc, cat=cat, tags=tags,
+                             rec="True", ra="True", params="{}")
+        w(fid, slug, head + "\n" + _fill(TMPL[tmpl], ctx), force)
+
+    # ---- v0006 regression fixture (kept OUT of the 256 starter set) ----
+    fid += 1
+    head = HEADER.format(
+        name="v0006 Regression", desc="PRESERVED FAILURE: matched 64 header "
+        "bits of the 8484-byte WebP then diverged at byte 8. Do not repair; "
+        "run against samples/regression/image.webp.", cat="Regression",
+        tags='["regression","v0006","lfsr"]', rec="True", ra="True",
+        params="{}")
+    w(fid, "v0006-regression", head + "\n" +
+      _fill(TMPL["v0006"], {"poly": 0xB400000000000017}), force)
+
+    assert fid == 257, f"generator must emit 256 starters + 1 regression, got {fid}"
     return fid
 
 

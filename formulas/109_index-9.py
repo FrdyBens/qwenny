@@ -31,11 +31,15 @@ def _bit(n, ps):
     return (h >> (23)) & 1
 
 def analyze(INPUT, PARAMETERS):
+    # Parameters are FIXED PUBLISHED CONSTANTS (salted by family id P/MODE).
+    # They are NOT derived from INPUT: a SHA-256(INPUT) seed would smuggle
+    # the source through a hash and fake reconstruction — forbidden here.
+    # Tiny constant state => prediction on arbitrary data is coin-flip;
+    # BER measures exactly that.
     import hashlib
-    # Parameters are DERIVED FROM INPUT during analysis (legitimate fitting);
-    # they are tiny, which means prediction quality on arbitrary data should
-    # be ~coin-flip. BER tells us exactly that.
-    d = hashlib.sha256(INPUT).digest()
+    d = hashlib.sha256(b"abc-indexlaw-9-15").digest()
+    while len(d) < P * 8:
+        d += hashlib.sha256(d).digest()
     ps = [int.from_bytes(d[i*8:(i+1)*8], "big") for i in range(P)]
     return {"ps": ps, "size": len(INPUT), "mode": MODE}
 

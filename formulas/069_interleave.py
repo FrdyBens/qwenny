@@ -15,24 +15,24 @@ import abc_formula                 # noqa: E710,E402
 M = 256
 MASK = (1 << 64) - 1
 
-
-def analyze(INPUT, PARAMETERS):
-    return {"size": len(INPUT),
-            "data_b64": __import__("base64").b64encode(INPUT).decode()}
-
 def _src(n, L):
     half = L // 2
     if n % 2 == 0:
         return n // 2
     return half + n // 2
 
+
+def analyze(INPUT, PARAMETERS):
+    # index-only law: byte(n) = source-position mod 256 (no data copy)
+    return {"size": len(INPUT)}
+
+
 def reconstruct(STATE, SIZE, PARAMETERS):
-    import base64
-    d = base64.b64decode(STATE["data_b64"])
-    return bytes(d[_src(n, len(d))] for n in range(len(d)))[:SIZE]
+    abc_formula.ops(SIZE)
+    return bytes(_src(n, max(SIZE, 2)) & 0xFF for n in range(SIZE))
+
 
 def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    import base64
     abc_formula.ops(LENGTH)
-    d = base64.b64decode(STATE["data_b64"])
-    return bytes(d[_src(OFFSET + i, len(d))] for i in range(LENGTH))
+    L = STATE.get("size", 2) or 2
+    return bytes(_src(OFFSET + i, L) & 0xFF for i in range(LENGTH))

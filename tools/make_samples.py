@@ -50,7 +50,7 @@ def make_webp(width: int, height: int) -> bytes:
 
 
 def main() -> None:
-    for d in ("text", "images", "video", "binary", "custom"):
+    for d in ("text", "images", "video", "binary", "regression", "custom"):
         (ROOT / "samples" / d).mkdir(parents=True, exist_ok=True)
 
     def write(rel: str, data: bytes) -> None:
@@ -70,9 +70,9 @@ def main() -> None:
               bytes(rng.randrange(256) for _ in range(kb * 1024)))
     write("binary/zeros-1kb.bin", bytes(1024))
     write("binary/gradient-4kb.bin", bytes(i % 256 for i in range(4096)))
-    write("binary/image.webp", make_webp(128, 100))
+    write("regression/image.webp", make_webp(128, 100))
     # sanity: first 8 bytes are the classic RIFF prefix users expect to see
-    w = (ROOT / "samples" / "binary" / "image.webp").read_bytes()
+    w = (ROOT / "samples" / "regression" / "image.webp").read_bytes()
     print("webp head:", w[:12].hex(" "), "size", len(w))
     assert w[:4] == b"RIFF" and w[8:12] == b"WEBP"
 

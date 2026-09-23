@@ -16,45 +16,43 @@ M = 256
 MASK = (1 << 64) - 1
 
 
-# byte(n) = data-free keyed map over index only? No — analysis extracts a
-# per-position residual vs the model; tests how well F(params,n) predicts
-# arbitrary bytes. KEY derived from input digest is NOT reconstruction info
-# beyond the stored key itself (key size counted honestly in state).
+# Direct-index law bit(n)=F(key,n), key fitted from input digest during
+# analysis. Key size counted honestly: with K<<N words it cannot carry N
+# bytes of entropy; BER near 0.5 on random data proves the limit.
 K = 32          # key words
 G = 7809847782465536322          # mixing constant
+
 
 def _gen_key(seed):
     s = seed
     out = []
     for _ in range(K):
-        s = (s * 6364136223846793005 + 1442695040888963407) & MASK
+        s = (s * 6364136223846793005 + G) & MASK
         out.append(s >> 16 & 0xFFFFFFFF)
     return out
 
-def analyze(INPUT, PARAMETERS):
-    import hashlib
-    seed = int.from_bytes(hashlib.sha256(INPUT).digest()[:8], "big")
-    key = _gen_key(seed)
-    enc = bytearray(INPUT)
-    L = len(INPUT)
-    for i in range(L):
-        enc[i] ^= (key[(i // 4) % K].to_bytes(4, "little")[i % 4])
-    # honest check: does the model predict anything without storing data?
-    # NO: we must still carry enc (the transformed copy). This family
-    # measures whether keying by digest reduces representation. It cannot.
-    return {"seed": seed, "size": L,
-            "enc_b64": __import__("base64").b64encode(bytes(enc)).decode()}
 
-def _dec(state, lo, hi):
-    import base64
-    e = base64.b64decode(state["enc_b64"])
-    key = _gen_key(state["seed"])
-    return bytes(e[i] ^ key[(i // 4) % K].to_bytes(4, "little")[i % 4]
-                 for i in range(lo, min(hi, len(e))))
+def analyze(INPUT, PARAMETERS):
+    # NOTE: the key is a FIXED published constant (salted by key width), NOT
+    # derived from INPUT. Deriving it from SHA-256(INPUT) would smuggle the
+    # source through a hash and fake a reconstruction. Pure law + constants.
+    import hashlib
+    seed = int.from_bytes(hashlib.sha256(b"abc-keyxor-32").digest()[:8], "big")
+    return {"seed": seed, "size": len(INPUT)}
+
+
+def _byte(n, key):
+    w = key[(n // 4) % K]
+    return w.to_bytes(4, "little")[n % 4]
+
 
 def reconstruct(STATE, SIZE, PARAMETERS):
-    return _dec(STATE, 0, SIZE)
+    key = _gen_key(STATE["seed"])
+    abc_formula.ops(SIZE)
+    return bytes(_byte(n, key) for n in range(SIZE))
+
 
 def read(STATE, OFFSET, LENGTH, PARAMETERS):
+    key = _gen_key(STATE["seed"])
     abc_formula.ops(LENGTH)
-    return _dec(STATE, OFFSET, OFFSET + LENGTH)
+    return bytes(_byte(OFFSET + i, key) for i in range(LENGTH))
