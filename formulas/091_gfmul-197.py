@@ -16,9 +16,12 @@ M = 256
 MASK = (1 << 64) - 1
 
 
-# Multiplication in GF(2^8) by a fixed element (carry-less, reduced by the
-# AES polynomial). Byte-local bijection when k != 0: true random access.
+# Multiplication in GF(2^8) (AES polynomial) by fixed element K, applied to
+# the BYTE AT THE POSITION treated as value n: byte(n)=gmul(n mod 256, K).
+# Pure law; bijection when K!=0 so its inverse exists but there is no data
+# in state to invert — this measures how well the law matches real bytes.
 K = 197
+
 
 def gmul(a, b):
     p = 0
@@ -31,28 +34,16 @@ def gmul(a, b):
             a ^= 0x1B
     return p
 
-INVK = None
-for _i in range(1, 256):
-    if gmul(K, _i) == 1:
-        INVK = _i
-        break
 
 def analyze(INPUT, PARAMETERS):
-    return {"size": len(INPUT),
-            "data_b64": __import__("base64").b64encode(INPUT).decode()}
+    return {"k": K, "size": len(INPUT)}
+
 
 def reconstruct(STATE, SIZE, PARAMETERS):
-    import base64
-    d = base64.b64decode(STATE["data_b64"])
-    if STATE.get("inv"):
-        return bytes(gmul(x, INVK) for x in d)[:SIZE]
-    return bytes(gmul(x, K) for x in d)[:SIZE]
+    abc_formula.ops(SIZE * 8)
+    return bytes(gmul(n & 0xFF, K) for n in range(SIZE))
+
 
 def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    import base64
     abc_formula.ops(LENGTH * 8)
-    d = base64.b64decode(STATE["data_b64"])
-    f = gmul
-    if STATE.get("inv"):
-        return bytes(f(x, INVK) for x in d[OFFSET:OFFSET + LENGTH])
-    return bytes(f(x, K) for x in d[OFFSET:OFFSET + LENGTH])
+    return bytes(gmul((OFFSET + i) & 0xFF, K) for i in range(LENGTH))

@@ -18,18 +18,16 @@ MASK = (1 << 64) - 1
 
 REV = [int(bin(i)[2:].zfill(8)[::-1], 2) for i in range(256)]
 
-def analyze(INPUT, PARAMETERS):
-    return {"size": len(INPUT),
-            "data_b64": __import__("base64").b64encode(INPUT).decode()}
 
-def _t(d):
-    return bytes(REV[x] for x in d)
+def analyze(INPUT, PARAMETERS):
+    return {"size": len(INPUT)}
+
 
 def reconstruct(STATE, SIZE, PARAMETERS):
-    import base64
-    return _t(base64.b64decode(STATE["data_b64"]))[:SIZE]
+    abc_formula.ops(SIZE)
+    return bytes(REV[n & 0xFF] for n in range(SIZE))
+
 
 def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    import base64
     abc_formula.ops(LENGTH)
-    return _t(base64.b64decode(STATE["data_b64"])[OFFSET:OFFSET + LENGTH])
+    return bytes(REV[(OFFSET + i) & 0xFF] for i in range(LENGTH))

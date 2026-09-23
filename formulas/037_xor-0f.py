@@ -18,19 +18,22 @@ MASK = (1 << 64) - 1
 
 K = 15
 
+
+def _f(x):
+    return x ^ K
+
+
 def analyze(INPUT, PARAMETERS):
-    return {"k": K, "size": len(INPUT),
-            "data_b64": __import__("base64").b64encode(INPUT).decode()}
+    # Pure law byte(n)=INPUT[n]^K. State holds only K: exactness on the
+    # original is impossible unless K==0; BER measures the gap honestly.
+    return {"k": K, "size": len(INPUT)}
+
 
 def reconstruct(STATE, SIZE, PARAMETERS):
-    import base64
-    k = STATE["k"]
-    d = base64.b64decode(STATE["data_b64"])
-    return bytes(x ^ k for x in d)[:SIZE]
+    abc_formula.ops(SIZE)
+    return bytes(_f(n & 0xFF) for n in range(SIZE))
+
 
 def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    import base64
     abc_formula.ops(LENGTH)
-    k = STATE["k"]
-    d = base64.b64decode(STATE["data_b64"])
-    return bytes(x ^ k for x in d[OFFSET:OFFSET + LENGTH])
+    return bytes(_f((OFFSET + i) & 0xFF) for i in range(LENGTH))

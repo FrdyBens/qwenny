@@ -16,10 +16,11 @@ M = 256
 MASK = (1 << 64) - 1
 
 
-# Elementary cellular automaton row evolution used as an index mixer:
-# byte(n) depends on rule table applied to (n's bit-triplets). Deterministic
-# index-only map; paired with stored copy for exactness. Tests CA-as-codec.
+# Elementary CA rule table as an index-only byte law: byte(n)=mix(n).
+# Deterministic function of position; tests whether CA structure alone
+# predicts arbitrary data (it should not — BER is the answer).
 RULE = 45
+
 
 def _mix(n):
     v = n & 0xFF
@@ -29,19 +30,19 @@ def _mix(n):
         acc = ((acc << 1) | ((RULE >> trip) & 1)) & 0xFF
     return acc
 
+
 MAP = [_mix(i) for i in range(256)]
 
+
 def analyze(INPUT, PARAMETERS):
-    return {"size": len(INPUT),
-            "data_b64": __import__("base64").b64encode(INPUT).decode()}
+    return {"size": len(INPUT)}
+
 
 def reconstruct(STATE, SIZE, PARAMETERS):
-    import base64
-    d = base64.b64decode(STATE["data_b64"])
-    return bytes(MAP[x] for x in d)[:SIZE]
+    abc_formula.ops(SIZE)
+    return bytes(MAP[n & 0xFF] for n in range(SIZE))
+
 
 def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    import base64
     abc_formula.ops(LENGTH)
-    d = base64.b64decode(STATE["data_b64"])
-    return bytes(MAP[x] for x in d[OFFSET:OFFSET + LENGTH])
+    return bytes(MAP[(OFFSET + i) & 0xFF] for i in range(LENGTH))

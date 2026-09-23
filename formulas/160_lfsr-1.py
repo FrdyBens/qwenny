@@ -16,54 +16,62 @@ M = 256
 MASK = (1 << 64) - 1
 
 
-# LFSR keystream XOR model: state = (tap poly id, seed, ciphertext-copy).
-# Reconstruction is exact ONLY because the ciphertext copy is carried —
-# the lab counts it. Random access simulates from bit 0 => probe will say
-# NOT TRUE RANDOM ACCESS. This preserves the v0006 lesson structurally.
+# LFSR keystream as a DIRECT-INDEX model: byte(n)=low8(T^n seed) XOR k_n
+# where k_n is the model's output itself -> pure law, no data copy.
+# v0006 lineage preserved: this family matched 64 header bits of a real
+# WebP then diverged at byte 8. State = (poly, seed) only; reconstruction
+# of arbitrary data is expected to FAIL and the lab reports how/where.
 POLY = 12970366926827028503     # feedback mask over 64 bits
 BITS = 64
 
-def _step(s):
-    lsb = s & 1
-    s >>= 1
-    if lsb:
-        s ^= POLY
-    return s & MASK
+
+def _nth(seed, n):
+    # jump-ahead via matrix-free bit trick: output bit n of a Galois LFSR
+    # is parity(mask_n & seed); we compute by repeated squaring of x^n mod
+    # the connection polynomial => TRUE random access (log n steps).
+    def clmul(a, b):
+        r = 0
+        while b:
+            if b & 1:
+                r ^= a
+            a <<= 1
+            b >>= 1
+        return r
+
+    def modred(v):
+        for i in range(127, 63, -1):
+            if (v >> i) & 1:
+                v ^= POLY << (i - 64)
+        return v & MASK
+
+    # x^n mod P
+    base, res = 2, 1
+    e = n
+    while e:
+        if e & 1:
+            res = modred(clmul(res, base))
+        base = modred(clmul(base, base))
+        e >>= 1
+    return res
+
 
 def analyze(INPUT, PARAMETERS):
     import hashlib
-    seed = int.from_bytes(hashlib.sha256(INPUT).digest()[:8], "big") or 1
-    ks = []
-    s = seed
-    for _ in range(len(INPUT)):
-        ks.append(s & 0xFF)
-        s = _step(s)
-        abc_formula.ops(1)
-    enc = bytes(a ^ b for a, b in zip(INPUT, ks))
-    return {"seed": seed, "size": len(INPUT),
-            "enc_b64": __import__("base64").b64encode(enc).decode()}
+    seed = int.from_bytes(hashlib.sha256(b"lfsr" + INPUT).digest()[:8],
+                          "big") or 1
+    return {"seed": seed, "size": len(INPUT)}
 
-def _stream(seed, n):
-    s = seed
-    for _ in range(n):
-        yield s & 0xFF
-        s = _step(s)
 
-def _win(STATE, OFFSET, LENGTH):
-    import base64
-    e = base64.b64decode(STATE["enc_b64"])
-    abc_formula.ops(OFFSET + LENGTH)   # simulated from start: measured!
-    out = bytearray()
-    s = STATE["seed"]
-    for i in range(OFFSET):
-        s = _step(s)
-    for i in range(LENGTH):
-        out.append(e[OFFSET + i] ^ (s & 0xFF))
-        s = _step(s)
-    return bytes(out)
+def _b(n, seed):
+    v = _nth(seed, n)
+    return v & 0xFF
+
 
 def reconstruct(STATE, SIZE, PARAMETERS):
-    return _win(STATE, 0, SIZE)
+    abc_formula.ops(SIZE * 128)   # log-depth jumps measured
+    return bytes(_b(n, STATE["seed"]) for n in range(SIZE))
+
 
 def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    return _win(STATE, OFFSET, LENGTH)
+    abc_formula.ops(LENGTH * 128)
+    return bytes(_b(OFFSET + i, STATE["seed"]) for i in range(LENGTH))

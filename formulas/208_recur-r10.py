@@ -16,43 +16,46 @@ M = 256
 MASK = (1 << 64) - 1
 
 
-# Nonlinear recurrence S_(n+1) = (a*S_n + S_n xor (S_n>>k)) mod 2^64,
-# byte(n) = low byte of S_n, seeded by analysis fit. Reconstruction carries
-# a ciphertext copy (counted). Simulated reads => probe flags false RA.
+# Nonlinear recurrence S_(n+1)=(A*S_n + S_n xor (S_n>>K)) mod 2^64 used as
+# a DIRECT-INDEX law byte(n)=low8(S_n). No data copy: honest test of
+# whether one seed can generate arbitrary content (it cannot; BER shows).
 A = 4294958829
 K = 19
+
 
 def _step(s):
     return (A * s + (s ^ (s >> K))) & MASK
 
+
+def _nth(seed, n):
+    s = seed
+    for _ in range(n):
+        s = _step(s)
+    return s
+
+
 def analyze(INPUT, PARAMETERS):
     import hashlib
-    s0 = int.from_bytes(hashlib.sha256(b"seedr10" + INPUT).digest()[:8],
+    s0 = int.from_bytes(hashlib.sha256(b"recurr10" + INPUT).digest()[:8],
                         "big")
-    s = s0
-    ks = bytearray()
-    for _ in range(len(INPUT)):
-        ks.append(s & 0xFF)
-        s = _step(s)
-    enc = bytes(x ^ y for x, y in zip(INPUT, ks))
-    return {"s0": s0, "size": len(INPUT),
-            "enc_b64": __import__("base64").b64encode(enc).decode()}
+    return {"s0": s0, "size": len(INPUT)}
 
-def _win(STATE, OFFSET, LENGTH):
-    import base64
-    e = base64.b64decode(STATE["enc_b64"])
-    abc_formula.ops(OFFSET + LENGTH)
+
+def reconstruct(STATE, SIZE, PARAMETERS):
+    abc_formula.ops(SIZE)
     s = STATE["s0"]
-    for _ in range(OFFSET):
-        s = _step(s)
     out = bytearray()
-    for _ in range(LENGTH):
-        out.append(e[OFFSET + len(out)] ^ (s & 0xFF))
+    for _ in range(SIZE):
+        out.append(s & 0xFF)
         s = _step(s)
     return bytes(out)
 
-def reconstruct(STATE, SIZE, PARAMETERS):
-    return _win(STATE, 0, SIZE)
 
 def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    return _win(STATE, OFFSET, LENGTH)
+    abc_formula.ops(OFFSET + LENGTH)   # simulate from S0: probe will flag
+    s = _nth(STATE["s0"], OFFSET)
+    out = bytearray()
+    for _ in range(LENGTH):
+        out.append(s & 0xFF)
+        s = _step(s)
+    return bytes(out)
