@@ -92,210 +92,213 @@ TMPL["byte_affine"] = '''
 A = {a}
 B = {b}
 
+
+def _f(x):
+    return (A * x + B) % M
+
+
 def analyze(INPUT, PARAMETERS):
-    # Tests: can b[n] = A*INPUT[n]+B mod 256 represent data? (It cannot
-    # shrink it — this measures how much structure real files give away.)
+    # Pure law byte(n) = f(INPUT[n]) mod 256. State carries ONLY the law
+    # parameters — no data copy. Therefore reconstruction of the ORIGINAL
+    # is impossible unless f is identity; the runner measures exactly how
+    # wrong it is (BER / first mismatch). This is the honest experiment.
     inv = pow(A, -1, M) if A % 2 and A else None
-    return {{"a": A, "b": B, "inv": inv, "size": len(INPUT),
-            "data_b64": __import__("base64").b64encode(INPUT).decode()}}
+    return {{"a": A, "b": B, "inv": inv, "size": len(INPUT)}}
+
 
 def reconstruct(STATE, SIZE, PARAMETERS):
-    import base64
-    d = base64.b64decode(STATE["data_b64"])
-    return bytes((STATE["a"] * x + STATE["b"]) % M for x in d)[:SIZE]
+    abc_formula.ops(SIZE)
+    return bytes(_f(n & 0xFF) for n in range(SIZE))
+
 
 def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    import base64
     abc_formula.ops(LENGTH)
-    d = base64.b64decode(STATE["data_b64"])
-    return bytes((STATE["a"] * x + STATE["b"]) % M
-                 for x in d[OFFSET:OFFSET + LENGTH])
+    return bytes(_f((OFFSET + i) & 0xFF) for i in range(LENGTH))
 '''
 
 TMPL["xor_const"] = """
 K = {k}
 
+
+def _f(x):
+    return x ^ K
+
+
 def analyze(INPUT, PARAMETERS):
-    return {{"k": K, "size": len(INPUT),
-            "data_b64": __import__("base64").b64encode(INPUT).decode()}}
+    # Pure law byte(n)=INPUT[n]^K. State holds only K: exactness on the
+    # original is impossible unless K==0; BER measures the gap honestly.
+    return {{"k": K, "size": len(INPUT)}}
+
 
 def reconstruct(STATE, SIZE, PARAMETERS):
-    import base64
-    k = STATE["k"]
-    d = base64.b64decode(STATE["data_b64"])
-    return bytes(x ^ k for x in d)[:SIZE]
+    abc_formula.ops(SIZE)
+    return bytes(_f(n & 0xFF) for n in range(SIZE))
+
 
 def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    import base64
     abc_formula.ops(LENGTH)
-    k = STATE["k"]
-    d = base64.b64decode(STATE["data_b64"])
-    return bytes(x ^ k for x in d[OFFSET:OFFSET + LENGTH])
+    return bytes(_f((OFFSET + i) & 0xFF) for i in range(LENGTH))
 """
 
 TMPL["bit_reverse"] = '''
 REV = [int(bin(i)[2:].zfill(8)[::-1], 2) for i in range(256)]
 
-def analyze(INPUT, PARAMETERS):
-    return {{"size": len(INPUT),
-            "data_b64": __import__("base64").b64encode(INPUT).decode()}}
 
-def _t(d):
-    return bytes(REV[x] for x in d)
+def analyze(INPUT, PARAMETERS):
+    return {{"size": len(INPUT)}}
+
 
 def reconstruct(STATE, SIZE, PARAMETERS):
-    import base64
-    return _t(base64.b64decode(STATE["data_b64"]))[:SIZE]
+    abc_formula.ops(SIZE)
+    return bytes(REV[n & 0xFF] for n in range(SIZE))
+
 
 def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    import base64
     abc_formula.ops(LENGTH)
-    return _t(base64.b64decode(STATE["data_b64"])[OFFSET:OFFSET + LENGTH])
+    return bytes(REV[(OFFSET + i) & 0xFF] for i in range(LENGTH))
 '''
 
 TMPL["nibble_swap"] = '''
 SW = [((i << 4) | (i >> 4)) & 255 for i in range(256)]
 
-def analyze(INPUT, PARAMETERS):
-    return {{"size": len(INPUT),
-            "data_b64": __import__("base64").b64encode(INPUT).decode()}}
 
-def _t(d):
-    return bytes(SW[x] for x in d)
+def analyze(INPUT, PARAMETERS):
+    return {{"size": len(INPUT)}}
+
 
 def reconstruct(STATE, SIZE, PARAMETERS):
-    import base64
-    return _t(base64.b64decode(STATE["data_b64"]))[:SIZE]
+    abc_formula.ops(SIZE)
+    return bytes(SW[n & 0xFF] for n in range(SIZE))
+
 
 def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    import base64
     abc_formula.ops(LENGTH)
-    return _t(base64.b64decode(STATE["data_b64"])[OFFSET:OFFSET + LENGTH])
+    return bytes(SW[(OFFSET + i) & 0xFF] for i in range(LENGTH))
 '''
 
 TMPL["byteswap"] = """
 W = {w}
 
-def analyze(INPUT, PARAMETERS):
-    return {{"w": W, "size": len(INPUT),
-            "data_b64": __import__("base64").b64encode(INPUT).decode()}}
 
-def _t(d, w):
-    out = bytearray(d)
-    for i in range(0, len(out) - w + 1, w):
-        out[i:i + w] = out[i:i + w][::-1]
-    return bytes(out)
+def _pos(n):
+    blk = (n // W) * W
+    return blk + (W - 1 - (n % W))
+
+
+def analyze(INPUT, PARAMETERS):
+    return {{"w": W, "size": len(INPUT)}}
+
 
 def reconstruct(STATE, SIZE, PARAMETERS):
-    import base64
-    return _t(base64.b64decode(STATE["data_b64"]), STATE["w"])[:SIZE]
+    abc_formula.ops(SIZE)
+    return bytes(_pos(n) & 0xFF for n in range(SIZE))
+
 
 def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    import base64
-    w = STATE["w"]
-    abc_formula.ops(LENGTH + w)
-    blk = (OFFSET // w) * w
-    d = base64.b64decode(STATE["data_b64"])
-    return _t(d[blk:blk + ((OFFSET - blk) + LENGTH)], w)[(OFFSET - blk):][:LENGTH]
+    abc_formula.ops(LENGTH)
+    return bytes(_pos(OFFSET + i) & 0xFF for i in range(LENGTH))
 """
 
 TMPL["index_xor_keyed"] = '''
-# byte(n) = data-free keyed map over index only? No — analysis extracts a
-# per-position residual vs the model; tests how well F(params,n) predicts
-# arbitrary bytes. KEY derived from input digest is NOT reconstruction info
-# beyond the stored key itself (key size counted honestly in state).
+# Direct-index law bit(n)=F(key,n), key fitted from input digest during
+# analysis. Key size counted honestly: with K<<N words it cannot carry N
+# bytes of entropy; BER near 0.5 on random data proves the limit.
 K = {k}          # key words
 G = {g}          # mixing constant
+
 
 def _gen_key(seed):
     s = seed
     out = []
     for _ in range(K):
-        s = (s * 6364136223846793005 + 1442695040888963407) & MASK
+        s = (s * 6364136223846793005 + G) & MASK
         out.append(s >> 16 & 0xFFFFFFFF)
     return out
+
 
 def analyze(INPUT, PARAMETERS):
     import hashlib
     seed = int.from_bytes(hashlib.sha256(INPUT).digest()[:8], "big")
-    key = _gen_key(seed)
-    enc = bytearray(INPUT)
-    L = len(INPUT)
-    for i in range(L):
-        enc[i] ^= (key[(i // 4) % K].to_bytes(4, "little")[i % 4])
-    # honest check: does the model predict anything without storing data?
-    # NO: we must still carry enc (the transformed copy). This family
-    # measures whether keying by digest reduces representation. It cannot.
-    return {{"seed": seed, "size": L,
-            "enc_b64": __import__("base64").b64encode(bytes(enc)).decode()}}
+    return {{"seed": seed, "size": len(INPUT)}}
 
-def _dec(state, lo, hi):
-    import base64
-    e = base64.b64decode(state["enc_b64"])
-    key = _gen_key(state["seed"])
-    return bytes(e[i] ^ key[(i // 4) % K].to_bytes(4, "little")[i % 4]
-                 for i in range(lo, min(hi, len(e))))
+
+def _byte(n, key):
+    w = key[(n // 4) % K]
+    return w.to_bytes(4, "little")[n % 4]
+
 
 def reconstruct(STATE, SIZE, PARAMETERS):
-    return _dec(STATE, 0, SIZE)
+    key = _gen_key(STATE["seed"])
+    abc_formula.ops(SIZE)
+    return bytes(_byte(n, key) for n in range(SIZE))
+
 
 def read(STATE, OFFSET, LENGTH, PARAMETERS):
+    key = _gen_key(STATE["seed"])
     abc_formula.ops(LENGTH)
-    return _dec(STATE, OFFSET, OFFSET + LENGTH)
+    return bytes(_byte(OFFSET + i, key) for i in range(LENGTH))
 '''
 
 TMPL["lfsr_stream"] = '''
-# LFSR keystream XOR model: state = (tap poly id, seed, ciphertext-copy).
-# Reconstruction is exact ONLY because the ciphertext copy is carried —
-# the lab counts it. Random access simulates from bit 0 => probe will say
-# NOT TRUE RANDOM ACCESS. This preserves the v0006 lesson structurally.
+# LFSR keystream as a DIRECT-INDEX model: byte(n)=low8(T^n seed) XOR k_n
+# where k_n is the model's output itself -> pure law, no data copy.
+# v0006 lineage preserved: this family matched 64 header bits of a real
+# WebP then diverged at byte 8. State = (poly, seed) only; reconstruction
+# of arbitrary data is expected to FAIL and the lab reports how/where.
 POLY = {poly}     # feedback mask over 64 bits
 BITS = 64
 
-def _step(s):
-    lsb = s & 1
-    s >>= 1
-    if lsb:
-        s ^= POLY
-    return s & MASK
+
+def _nth(seed, n):
+    # jump-ahead via matrix-free bit trick: output bit n of a Galois LFSR
+    # is parity(mask_n & seed); we compute by repeated squaring of x^n mod
+    # the connection polynomial => TRUE random access (log n steps).
+    def clmul(a, b):
+        r = 0
+        while b:
+            if b & 1:
+                r ^= a
+            a <<= 1
+            b >>= 1
+        return r
+
+    def modred(v):
+        for i in range(127, 63, -1):
+            if (v >> i) & 1:
+                v ^= POLY << (i - 64)
+        return v & MASK
+
+    # x^n mod P
+    base, res = 2, 1
+    e = n
+    while e:
+        if e & 1:
+            res = modred(clmul(res, base))
+        base = modred(clmul(base, base))
+        e >>= 1
+    return res
+
 
 def analyze(INPUT, PARAMETERS):
     import hashlib
-    seed = int.from_bytes(hashlib.sha256(INPUT).digest()[:8], "big") or 1
-    ks = []
-    s = seed
-    for _ in range(len(INPUT)):
-        ks.append(s & 0xFF)
-        s = _step(s)
-        abc_formula.ops(1)
-    enc = bytes(a ^ b for a, b in zip(INPUT, ks))
-    return {{"seed": seed, "size": len(INPUT),
-            "enc_b64": __import__("base64").b64encode(enc).decode()}}
+    seed = int.from_bytes(hashlib.sha256(b"lfsr" + INPUT).digest()[:8],
+                          "big") or 1
+    return {{"seed": seed, "size": len(INPUT)}}
 
-def _stream(seed, n):
-    s = seed
-    for _ in range(n):
-        yield s & 0xFF
-        s = _step(s)
 
-def _win(STATE, OFFSET, LENGTH):
-    import base64
-    e = base64.b64decode(STATE["enc_b64"])
-    abc_formula.ops(OFFSET + LENGTH)   # simulated from start: measured!
-    out = bytearray()
-    s = STATE["seed"]
-    for i in range(OFFSET):
-        s = _step(s)
-    for i in range(LENGTH):
-        out.append(e[OFFSET + i] ^ (s & 0xFF))
-        s = _step(s)
-    return bytes(out)
+def _b(n, seed):
+    v = _nth(seed, n)
+    return v & 0xFF
+
 
 def reconstruct(STATE, SIZE, PARAMETERS):
-    return _win(STATE, 0, SIZE)
+    abc_formula.ops(SIZE * 128)   # log-depth jumps measured
+    return bytes(_b(n, STATE["seed"]) for n in range(SIZE))
+
 
 def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    return _win(STATE, OFFSET, LENGTH)
+    abc_formula.ops(LENGTH * 128)
+    return bytes(_b(OFFSET + i, STATE["seed"]) for i in range(LENGTH))
 '''
 
 TMPL["direct_index"] = '''
@@ -341,11 +344,12 @@ def read(STATE, OFFSET, LENGTH, PARAMETERS):
 '''
 
 TMPL["perm_feistel"] = '''
-# Feistel-like permutation of INDEX space: byte(n)=T(pi(n)) style test with
-# pi a keyless fixed-round Feistel on 32-bit index, combined with a stored
-# transformed copy (again counted). Tests permutation-of-domain ideas.
+# Feistel permutation of the INDEX domain: byte(n) = pi(n) mod 256 with pi
+# a keyless R-round Feistel on 32-bit indices. Pure law, no data copy.
+# Inverse is O(R) per position => true random access candidate.
 R = {r}   # rounds
 C = {c}   # round constant mix
+
 
 def _f(x, i):
     x = (x + i * C) & 0xFFFFFFFF
@@ -354,46 +358,26 @@ def _f(x, i):
     x ^= (x << 5) & 0xFFFFFFFF
     return x & 0xFFFFFFFF
 
+
 def perm(n):
     lo, hi = n & 0xFFFF, (n >> 16) & 0xFFFF
     for i in range(R):
         lo, hi = hi, lo ^ _f(hi, i)
     return ((hi & 0xFFFF) << 16) | (lo & 0xFFFF)
 
-INV = {{}}
-
-def unperm(m):
-    if m in INV:
-        return INV[m]
-    # invert by scanning is O(2^32): we instead recompute forward rounds
-    lo, hi = m & 0xFFFF, (m >> 16) & 0xFFFF
-    for i in reversed(range(R)):
-        prev_hi = lo
-        prev_lo = hi ^ _f(lo, i)
-        lo, hi = prev_lo & 0xFFFF, prev_hi & 0xFFFF
-    INV[m] = (hi << 16) | lo
-    return INV[m]
 
 def analyze(INPUT, PARAMETERS):
-    return {{"size": len(INPUT),
-            "data_b64": __import__("base64").b64encode(INPUT).decode()}}
+    return {{"size": len(INPUT)}}
+
 
 def reconstruct(STATE, SIZE, PARAMETERS):
-    import base64
-    d = base64.b64decode(STATE["data_b64"])
-    out = bytearray(len(d))
-    for n in range(len(d)):
-        out[unperm(n) % len(d)] = d[n]
-    return bytes(out)[:SIZE]
+    abc_formula.ops(SIZE * R)
+    return bytes(perm(n) & 0xFF for n in range(SIZE))
+
 
 def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    import base64
-    d = base64.b64decode(STATE["data_b64"])
-    abc_formula.ops(len(d))   # full inverse scan needed: probe will catch it
-    out = bytearray(len(d))
-    for n in range(len(d)):
-        out[unperm(n) % len(d)] = d[n]
-    return bytes(out[OFFSET:OFFSET + LENGTH])
+    abc_formula.ops(LENGTH * R)
+    return bytes(perm(OFFSET + i) & 0xFF for i in range(LENGTH))
 '''
 
 TMPL["fourier_quant"] = '''
@@ -468,53 +452,57 @@ def read(STATE, OFFSET, LENGTH, PARAMETERS):
 '''
 
 TMPL["recurrence_state"] = '''
-# Nonlinear recurrence S_(n+1) = (a*S_n + S_n xor (S_n>>k)) mod 2^64,
-# byte(n) = low byte of S_n, seeded by analysis fit. Reconstruction carries
-# a ciphertext copy (counted). Simulated reads => probe flags false RA.
+# Nonlinear recurrence S_(n+1)=(A*S_n + S_n xor (S_n>>K)) mod 2^64 used as
+# a DIRECT-INDEX law byte(n)=low8(S_n). No data copy: honest test of
+# whether one seed can generate arbitrary content (it cannot; BER shows).
 A = {a}
 K = {k}
+
 
 def _step(s):
     return (A * s + (s ^ (s >> K))) & MASK
 
+
+def _nth(seed, n):
+    s = seed
+    for _ in range(n):
+        s = _step(s)
+    return s
+
+
 def analyze(INPUT, PARAMETERS):
     import hashlib
-    s0 = int.from_bytes(hashlib.sha256(b"seed{salt}" + INPUT).digest()[:8],
+    s0 = int.from_bytes(hashlib.sha256(b"recur{salt}" + INPUT).digest()[:8],
                         "big")
-    s = s0
-    ks = bytearray()
-    for _ in range(len(INPUT)):
-        ks.append(s & 0xFF)
-        s = _step(s)
-    enc = bytes(x ^ y for x, y in zip(INPUT, ks))
-    return {{"s0": s0, "size": len(INPUT),
-            "enc_b64": __import__("base64").b64encode(enc).decode()}}
+    return {{"s0": s0, "size": len(INPUT)}}
 
-def _win(STATE, OFFSET, LENGTH):
-    import base64
-    e = base64.b64decode(STATE["enc_b64"])
-    abc_formula.ops(OFFSET + LENGTH)
+
+def reconstruct(STATE, SIZE, PARAMETERS):
+    abc_formula.ops(SIZE)
     s = STATE["s0"]
-    for _ in range(OFFSET):
-        s = _step(s)
     out = bytearray()
-    for _ in range(LENGTH):
-        out.append(e[OFFSET + len(out)] ^ (s & 0xFF))
+    for _ in range(SIZE):
+        out.append(s & 0xFF)
         s = _step(s)
     return bytes(out)
 
-def reconstruct(STATE, SIZE, PARAMETERS):
-    return _win(STATE, 0, SIZE)
 
 def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    return _win(STATE, OFFSET, LENGTH)
+    abc_formula.ops(OFFSET + LENGTH)   # simulate from S0: probe will flag
+    s = _nth(STATE["s0"], OFFSET)
+    out = bytearray()
+    for _ in range(LENGTH):
+        out.append(s & 0xFF)
+        s = _step(s)
+    return bytes(out)
 '''
 
 TMPL["ca_rule"] = '''
-# Elementary cellular automaton row evolution used as an index mixer:
-# byte(n) depends on rule table applied to (n's bit-triplets). Deterministic
-# index-only map; paired with stored copy for exactness. Tests CA-as-codec.
+# Elementary CA rule table as an index-only byte law: byte(n)=mix(n).
+# Deterministic function of position; tests whether CA structure alone
+# predicts arbitrary data (it should not — BER is the answer).
 RULE = {rule}
+
 
 def _mix(n):
     v = n & 0xFF
@@ -524,28 +512,31 @@ def _mix(n):
         acc = ((acc << 1) | ((RULE >> trip) & 1)) & 0xFF
     return acc
 
+
 MAP = [_mix(i) for i in range(256)]
 
+
 def analyze(INPUT, PARAMETERS):
-    return {{"size": len(INPUT),
-            "data_b64": __import__("base64").b64encode(INPUT).decode()}}
+    return {{"size": len(INPUT)}}
+
 
 def reconstruct(STATE, SIZE, PARAMETERS):
-    import base64
-    d = base64.b64decode(STATE["data_b64"])
-    return bytes(MAP[x] for x in d)[:SIZE]
+    abc_formula.ops(SIZE)
+    return bytes(MAP[n & 0xFF] for n in range(SIZE))
+
 
 def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    import base64
     abc_formula.ops(LENGTH)
-    d = base64.b64decode(STATE["data_b64"])
-    return bytes(MAP[x] for x in d[OFFSET:OFFSET + LENGTH])
+    return bytes(MAP[(OFFSET + i) & 0xFF] for i in range(LENGTH))
 '''
 
 TMPL["gf_mul"] = '''
-# Multiplication in GF(2^8) by a fixed element (carry-less, reduced by the
-# AES polynomial). Byte-local bijection when k != 0: true random access.
+# Multiplication in GF(2^8) (AES polynomial) by fixed element K, applied to
+# the BYTE AT THE POSITION treated as value n: byte(n)=gmul(n mod 256, K).
+# Pure law; bijection when K!=0 so its inverse exists but there is no data
+# in state to invert — this measures how well the law matches real bytes.
 K = {k}
+
 
 def gmul(a, b):
     p = 0
@@ -558,69 +549,56 @@ def gmul(a, b):
             a ^= 0x1B
     return p
 
-INVK = None
-for _i in range(1, 256):
-    if gmul(K, _i) == 1:
-        INVK = _i
-        break
 
 def analyze(INPUT, PARAMETERS):
-    return {{"size": len(INPUT),
-            "data_b64": __import__("base64").b64encode(INPUT).decode()}}
+    return {{"k": K, "size": len(INPUT)}}
+
 
 def reconstruct(STATE, SIZE, PARAMETERS):
-    import base64
-    d = base64.b64decode(STATE["data_b64"])
-    if STATE.get("inv"):
-        return bytes(gmul(x, INVK) for x in d)[:SIZE]
-    return bytes(gmul(x, K) for x in d)[:SIZE]
+    abc_formula.ops(SIZE * 8)
+    return bytes(gmul(n & 0xFF, K) for n in range(SIZE))
+
 
 def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    import base64
     abc_formula.ops(LENGTH * 8)
-    d = base64.b64decode(STATE["data_b64"])
-    f = gmul
-    if STATE.get("inv"):
-        return bytes(f(x, INVK) for x in d[OFFSET:OFFSET + LENGTH])
-    return bytes(f(x, K) for x in d[OFFSET:OFFSET + LENGTH])
+    return bytes(gmul((OFFSET + i) & 0xFF, K) for i in range(LENGTH))
 '''
 
 
 TMPL["hybrid"] = """
-# Hybrid composition of two byte-local bijections P then Q.
-# Tests whether composing structures from different families changes the
-# representation cost (it should not for pure bijections — verify).
+# Composition of two index-only byte laws P then Q (both from different
+# families). Tests closure: composition of non-representing laws still
+# represents nothing — and verifies the lab counts it that way.
 PNAME = __P__
 QNAME = __Q__
 
 PS = {
-    "affine": lambda x, s=(3, 5): (s[0] * x + s[1]) % M,
-    "xor": lambda x, s=0x5A: x ^ s,
-    "rot": lambda x, s=3: ((x << s) | (x >> (8 - s))) & 255,
-    "gray": lambda x, s=None: x ^ (x >> 1),
-    "rev": lambda x, s=None: int(bin(x)[2:].zfill(8)[::-1], 2),
-    "nib": lambda x, s=None: ((x << 4) | (x >> 4)) & 255,
+    "affine": lambda x: (3 * x + 5) % M,
+    "xor": lambda x: x ^ 0x5A,
+    "rot": lambda x: ((x << 3) | (x >> 5)) & 255,
+    "gray": lambda x: x ^ (x >> 1),
+    "rev": lambda x: int(bin(x)[2:].zfill(8)[::-1], 2),
+    "nib": lambda x: ((x << 4) | (x >> 4)) & 255,
 }
 
-def _mk(name):
-    return PS[name]
 
 def analyze(INPUT, PARAMETERS):
-    return {"p": PNAME, "q": QNAME, "size": len(INPUT),
-            "data_b64": __import__("base64").b64encode(INPUT).decode()}
+    return {{"p": PNAME, "q": QNAME, "size": len(INPUT)}}
+
+
+def _val(n):
+    x = n & 0xFF
+    return PS[QNAME](PS[PNAME](x))
+
 
 def reconstruct(STATE, SIZE, PARAMETERS):
-    import base64
-    d = base64.b64decode(STATE["data_b64"])
-    f = _mk(STATE["p"]); g = _mk(STATE["q"])
-    return bytes(g(f(x)) for x in d)[:SIZE]
+    abc_formula.ops(SIZE * 2)
+    return bytes(_val(n) for n in range(SIZE))
+
 
 def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    import base64
-    abc_formula.ops(LENGTH)
-    d = base64.b64decode(STATE["data_b64"])
-    f = _mk(STATE["p"]); g = _mk(STATE["q"])
-    return bytes(g(f(x)) for x in d[OFFSET:OFFSET + LENGTH])
+    abc_formula.ops(LENGTH * 2)
+    return bytes(_val(OFFSET + i) for i in range(LENGTH))
 """
 
 
@@ -663,40 +641,43 @@ def read(STATE, OFFSET, LENGTH, PARAMETERS):
 
 
 TMPL["lcg"] = """
-# LCG keystream: S'=(a*S+c)%2^64, byte(n)=low byte(S_n) XOR ciphertext copy.
-# Classic recurrence; reads simulate => probe must flag NOT TRUE RA.
+# LCG as direct-index law byte(n)=low8(S_n), S_(n+1)=(A*S_n+C) mod 2^64.
+# State = seed only. Reconstruction of arbitrary data is not expected;
+# this family measures the gap and whether jump-ahead gives true RA.
 A = {a}
 C = {c}
+
 
 def _step(s):
     return (A * s + C) & MASK
 
+
 def analyze(INPUT, PARAMETERS):
     import hashlib
     s0 = int.from_bytes(hashlib.sha256(b"lcg{salt}").digest()[:8], "big")
-    s = s0
-    enc = bytearray()
-    for x in INPUT:
-        s = _step(s)
-        enc.append(x ^ (s & 255))
-    return {{"s0": s0, "size": len(INPUT),
-            "enc_b64": __import__("base64").b64encode(bytes(enc)).decode()}}
+    return {{"s0": s0, "size": len(INPUT)}}
 
-def _win(STATE, OFFSET, LENGTH):
-    import base64
-    e = base64.b64decode(STATE["enc_b64"])
-    abc_formula.ops(OFFSET + LENGTH)
-    s = STATE["s0"]
-    for i in range(OFFSET + LENGTH):
-        s = _step(s)
-        if i >= OFFSET:
-            yield e[i] ^ (s & 255)
 
 def reconstruct(STATE, SIZE, PARAMETERS):
-    return bytes(_win(STATE, 0, SIZE))
+    abc_formula.ops(SIZE)
+    s = STATE["s0"]
+    out = bytearray()
+    for _ in range(SIZE):
+        out.append(s & 0xFF)
+        s = _step(s)
+    return bytes(out)
+
 
 def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    return bytes(_win(STATE, OFFSET, LENGTH))
+    abc_formula.ops(OFFSET + LENGTH)   # simulate from S0: probe flags it
+    s = STATE["s0"]
+    for _ in range(OFFSET):
+        s = _step(s)
+    out = bytearray()
+    for _ in range(LENGTH):
+        out.append(s & 0xFF)
+        s = _step(s)
+    return bytes(out)
 """
 
 
@@ -714,6 +695,9 @@ def _fill(tmpl: str, ctx: dict) -> str:
 
 def build(force: bool) -> int:
     OUT.mkdir(exist_ok=True)
+    import shutil
+    if force:
+        shutil.rmtree(OUT); OUT.mkdir()
     fid = 0
     def emit(tmpl, slug, fmt, ra="True", rec="True", n=1):
         nonlocal fid
@@ -810,18 +794,28 @@ def build(force: bool) -> int:
             name=f"Rotate {sh}", desc=f"circular rotate left by {sh} bits.",
             cat="BitOps", tags='["bitops","bijection"]', rec="True",
             ra="True", params="{}")
-        tbl = [((i << sh) | (i >> (8 - sh))) & 255 for i in range(256)]
-        body = ("\nROT = %r\n\n\ndef analyze(INPUT, PARAMETERS):\n    "
-                'return {"size": len(INPUT), "data_b64": '
-                '__import__("base64").b64encode(INPUT).decode()}\n\n\n'
-                "def reconstruct(STATE, SIZE, PARAMETERS):\n    import base64\n"
-                "    d = base64.b64decode(STATE['data_b64'])\n"
-                "    return bytes(ROT[x] for x in d)[:SIZE]\n\n\n"
-                "def read(STATE, OFFSET, LENGTH, PARAMETERS):\n    import base64\n"
-                "    abc_formula.ops(LENGTH)\n"
-                "    d = base64.b64decode(STATE['data_b64'])\n"
-                "    return bytes(ROT[x] for x in d[OFFSET:OFFSET+LENGTH])\n"
-                % (tbl,))
+        s_ = sh
+        body = ("
+SH = %d
+
+
+def _rot(x):
+    return ((x << SH) | (x >> (8 - SH))) & 255
+
+
+def analyze(INPUT, PARAMETERS):
+    return {"size": len(INPUT)}
+
+
+def reconstruct(STATE, SIZE, PARAMETERS):
+    abc_formula.ops(SIZE)
+    return bytes(_rot(n & 0xFF) for n in range(SIZE))
+
+
+def read(STATE, OFFSET, LENGTH, PARAMETERS):
+    abc_formula.ops(LENGTH)
+    return bytes(_rot((OFFSET + i) & 0xFF) for i in range(LENGTH))
+" % (s_,))
         w(fid, f"rot{sh}", head + body, force)
 
     # gray code (byte-local bijection, classic structure experiment)
@@ -830,21 +824,24 @@ def build(force: bool) -> int:
         name="Gray Code", desc="binary->gray per byte: g=b^(b>>1). "
         "Reversible; tests locality-preserving maps.", cat="BitOps",
         tags='["bitops","bijection"]', rec="True", ra="True", params="{}")
-    gr = [i ^ (i >> 1) for i in range(256)]
-    ig = [0] * 256
-    for i, g in enumerate(gr):
-        ig[g] = i
-    body = ("\nGRAY=%r\nIGRAY=%r\n\n\ndef analyze(INPUT, PARAMETERS):\n"
-            '    return {"size": len(INPUT), "data_b64": '
-            '__import__("base64").b64encode(INPUT).decode()}\n\n\n'
-            "def reconstruct(STATE, SIZE, PARAMETERS):\n    import base64\n"
-            "    d=base64.b64decode(STATE['data_b64'])\n"
-            "    return bytes(IGRAY[x] if STATE.get('inv') else GRAY[x] "
-            "for x in d)[:SIZE]\n\n\n"
-            "def read(STATE, OFFSET, LENGTH, PARAMETERS):\n    import base64\n"
-            "    abc_formula.ops(LENGTH)\n    d=base64.b64decode("
-            "STATE['data_b64'])\n    return bytes((IGRAY if STATE.get('inv')"
-            " else GRAY)[x] for x in d[OFFSET:OFFSET+LENGTH])\n" % (gr, ig))
+    body = """
+def _g(x):
+    return x ^ (x >> 1)
+
+
+def analyze(INPUT, PARAMETERS):
+    return {"size": len(INPUT)}
+
+
+def reconstruct(STATE, SIZE, PARAMETERS):
+    abc_formula.ops(SIZE)
+    return bytes(_g(n & 0xFF) for n in range(SIZE))
+
+
+def read(STATE, OFFSET, LENGTH, PARAMETERS):
+    abc_formula.ops(LENGTH)
+    return bytes(_g((OFFSET + i) & 0xFF) for i in range(LENGTH))
+"""
     w(fid, "gray", head + body, force)
 
     # interleaving of two halves (index-global bijection, true RA)
@@ -854,29 +851,29 @@ def build(force: bool) -> int:
         "global index permutation with O(1) inverse => true random access.",
         cat="BitOps", tags='["bitops","permutation"]', rec="True", ra="True",
         params="{}")
-    body = '''
-
-def analyze(INPUT, PARAMETERS):
-    return {"size": len(INPUT),
-            "data_b64": __import__("base64").b64encode(INPUT).decode()}
-
+    body = """
 def _src(n, L):
     half = L // 2
     if n % 2 == 0:
         return n // 2
     return half + n // 2
 
+
+def analyze(INPUT, PARAMETERS):
+    # index-only law: byte(n) = source-position mod 256 (no data copy)
+    return {"size": len(INPUT)}
+
+
 def reconstruct(STATE, SIZE, PARAMETERS):
-    import base64
-    d = base64.b64decode(STATE["data_b64"])
-    return bytes(d[_src(n, len(d))] for n in range(len(d)))[:SIZE]
+    abc_formula.ops(SIZE)
+    return bytes(_src(n, max(SIZE, 2)) & 0xFF for n in range(SIZE))
+
 
 def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    import base64
     abc_formula.ops(LENGTH)
-    d = base64.b64decode(STATE["data_b64"])
-    return bytes(d[_src(OFFSET + i, len(d))] for i in range(LENGTH))
-'''
+    L = STATE.get("size", 2) or 2
+    return bytes(_src(OFFSET + i, L) & 0xFF for i in range(LENGTH))
+"""
     w(fid, "interleave", head + body, force)
 
     # ---- Algebra 060+: GF mults, direct-index laws, Fourier, CA ----
@@ -1064,9 +1061,9 @@ def read(STATE, OFFSET, LENGTH, PARAMETERS):
                     return rows
         rows = rand_mat()
         body = f"""
-
 ROWS = {rows!r}
 OFF = {_r.randrange(256)}
+
 
 def _apply(x):
     r = 0
@@ -1075,239 +1072,23 @@ def _apply(x):
             r ^= rw
     return r ^ OFF
 
-MAP = [_apply(i) for i in range(256)]
-INV = [0]*256
-for _i, _v in enumerate(MAP):
-    INV[_v] = _i
-
-def analyze(INPUT, PARAMETERS):
-    return {{"size": len(INPUT),
-            "data_b64": __import__("base64").b64encode(INPUT).decode()}}
-
-def reconstruct(STATE, SIZE, PARAMETERS):
-    import base64
-    d = base64.b64decode(STATE["data_b64"])
-    return bytes(MAP[x] for x in d)[:SIZE]
-
-def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    import base64
-    abc_formula.ops(LENGTH)
-    d = base64.b64decode(STATE["data_b64"])
-    return bytes(MAP[x] for x in d[OFFSET:OFFSET + LENGTH])
-"""
-        w(fid, f"gfaff-{si+1}", head + body, force)
-
-    # ---- Polynomial maps mod 256 (quadratic/cubic index laws) ----
-    for (c2, c3, b) in [(1, 0, 0), (3, 1, 5), (5, 2, 7), (7, 3, 1),
-                        (9, 4, 3), (11, 5, 9), (13, 6, 11), (15, 7, 13)]:
-        fid += 1
-        head = HEADER.format(
-            name=f"Poly Index {c2}n^2+{c3}n^3", desc="byte(n)=(c2*n^2+"
-            "c3*n^3+n+b)%256 fitted offsets only; pure index law test.",
-            cat="DirectAccess", tags='["direct-access","polynomial"]',
-            rec="True", ra="True", params="{}")
-        body = f"""
-C2 = {c2}
-C3 = {c3}
-B = {b}
-
-def analyze(INPUT, PARAMETERS):
-    # fit single additive offset b* minimizing error on first 8 bytes
-    head = INPUT[:8]
-    best = min(range(256), key=lambda bo: sum(
-        bin(((C2*i*i + C3*i*i*i + i + B + bo) % M) ^ head[i]).count("1")
-        for i in range(len(head))))
-    return {{"bo": best, "size": len(INPUT)}}
-
-def _gen(STATE, lo, hi):
-    bo = STATE["bo"]
-    return bytes((C2*n*n + C3*n*n*n + n + B + bo) % M for n in range(lo, hi))
-
-def reconstruct(STATE, SIZE, PARAMETERS):
-    abc_formula.ops(SIZE)
-    return _gen(STATE, 0, SIZE)
-
-def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    abc_formula.ops(LENGTH)
-    return _gen(STATE, OFFSET, OFFSET + LENGTH)
-"""
-        w(fid, f"poly-{c2}-{c3}", head + body, force)
-
-    # ---- Bit-slice interleave of two byte streams (odd/even split) ----
-    for grp in (2, 4, 8):
-        fid += 1
-        head = HEADER.format(
-            name=f"Bit Slice Groups {grp}", desc="transpose bits across "
-            f"{grp}-byte groups: tests bit-plane reorganization as a codec "
-            "(bijection, true RA within group window).", cat="BitOps",
-            tags='["bitops","bitplane","bijection"]', rec="True", ra="True",
-            params="{}")
-        body = f"""
-G = {grp}
-
-def _enc(block):
-    out = [0]*G
-    for j in range(G):
-        v = 0
-        for k in range(8):
-            bits = 0
-            for i in range(G):
-                bits = (bits << 1) | ((block[i] >> k) & 1) if G <= 8 else 0
-            v = (v << 1) | ((bits >> (G - 1 - j)) & 1)
-        out[j] = v & 255
-    return out
-
-MAPT = {{tuple(range(G)): None}}
-
-def analyze(INPUT, PARAMETERS):
-    return {{"size": len(INPUT),
-            "data_b64": __import__("base64").b64encode(INPUT).decode()}}
-
-def _tr(block):
-    # transpose the 8xG bit matrix (pad columns with 0 beyond data)
-    rows = [[(b >> k) & 1 for k in range(8)] for b in block]
-    out = []
-    for j in range(G):
-        v = 0
-        for k in range(8):
-            v |= (rows[k][j] if k < len(rows) else 0) << k
-        out.append(v)
-    return out
-
-def reconstruct(STATE, SIZE, PARAMETERS):
-    import base64
-    d = base64.b64decode(STATE["data_b64"])
-    out = bytearray()
-    for i in range(0, len(d) - G + 1, G):
-        out += _tr(d[i:i+G])
-    out += d[len(d) - (len(d) % G):] if len(d) % G else b""
-    return bytes(out)[:SIZE]
-
-def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    import base64
-    abc_formula.ops(LENGTH + G)
-    d = base64.b64decode(STATE["data_b64"])
-    blk = (OFFSET // G) * G
-    t = _tr(d[blk:blk + ((OFFSET - blk) + LENGTH)])
-    return bytes(t[(OFFSET - blk):])[:LENGTH]
-"""
-        w(fid, f"slices-{grp}", head + body, force)
-
-    # ---- LCG parameter sets (distinct multipliers/addends) ----
-    for (a, c, salt) in [(6364136223846793005, 1442695040888963407, "l1"),
-                         (2862933555777941757, 3037000493, "l2"),
-                         (0x9E3779B97F4A7C15, 0xBF58476D1CE4E5B9, "l3"),
-                         (0xD1342543DE82EF95, 0x12345, "l4"),
-                         (57005, 0xDEADBEEF, "l5"),
-                         (0x41C64E6D, 0x3039, "l6"),
-                         (0x5DEECE66D, 0xB, "l7"),
-                         (0x1003F, 0x523EAB, "l8")]:
-        fid += 1
-        head = HEADER.format(
-            name=f"LCG {salt}", desc="linear congruential keystream XOR with "
-            "stored ciphertext copy; recurrence-class control experiment.",
-            cat="Recurrence", tags='["recurrence","lcg"]', rec="True",
-            ra="True", params="{}")
-        w(fid, f"lcg-{salt}", head + "\n" +
-          _fill(TMPL["lcg"], {"a": a, "c": c, "salt": salt}), force)
-
-    # ---- More nonlinear recurrences ----
-    for (a, kk, salt) in [(0x100000001B3, 11, "r7"), (0xAF, 41, "r8"),
-                          (0x8F5B, 23, "r9"), (0xFFFFDEED, 19, "r10")]:
-        fid += 1
-        head = HEADER.format(
-            name=f"Nonlinear Recurrence {salt}", desc="S'=(aS + (s>>k)^s) "
-            "keystream XOR model. Carries ciphertext copy; reads simulate "
-            "from S0 — regression-class behavior for the RA probe.",
-            cat="Recurrence", tags='["recurrence","stream"]', rec="True",
-            ra="True", params="{}")
-        w(fid, f"recur-{salt}", head + "\n" +
-          _fill(TMPL["recurrence_state"], {"a": a, "k": kk, "salt": salt}),
-          force)
-
-    # ---- More LFSR polys ----
-    for poly in [0xE100000000000000 + 0x0B, 0xF400000000000000 + 0x1F,
-                 0x9D00000000000000 + 0x4B, 0xCB00000000000000 + 0x67]:
-        fid += 1
-        head = HEADER.format(
-            name=f"LFSR-64 0x{poly:X}", desc="64-bit Galois LFSR keystream XOR. "
-            "v0006 lineage: matched 64 header bits of a WebP then diverged. "
-            "Keeps ciphertext copy in state; probe should report simulated "
-            "access.", cat="LFSR", tags='["lfsr","regression-v0006"]',
-            rec="True", ra="True", params="{}")
-        w(fid, f"lfsr-{poly & 0xFF:02x}", head + "\n" +
-          _fill(TMPL["lfsr_stream"], {"poly": poly}), force)
-
-    # ---- Hybrids to reach ~256: compositions across families ----
-    names = ["affine", "xor", "rot", "gray", "rev", "nib"]
-    pairs = [(p, q) for p in names for q in names if p != q]
-    for (p, q) in pairs:
-        fid += 1
-        head = HEADER.format(
-            name=f"Hybrid {p}+{q}",
-            desc="composition of two byte-local bijections from different "
-                 "families; verifies closure and true random access.",
-            cat="Hybrid", tags='["hybrid","bijection"]', rec="True",
-            ra="True", params="{}")
-    # ---- Additional algebraic substitutions (S-box-like affine over GF(2)) ----
-    import random as _rnd
-    _r = _rnd.Random(77)
-    for si in range(12):
-        fid += 1
-        head = HEADER.format(
-            name=f"GF Affine Sub {si+1}", desc="byte -> A*x+b over GF(2)^8 "
-            "with random invertible matrix A (XOR of bit permutations): "
-            "linear-algebra substitution family; bijection, true RA.",
-            cat="Algebra", tags='["algebra","gf2","bijection"]', rec="True",
-            ra="True", params="{}")
-        # build invertible 8x8 GF(2) matrix by random row combinations
-        def rand_mat():
-            while True:
-                rows = [_r.randrange(256) for _ in range(8)]
-                # rank check via gaussian elim
-                m = rows[:]; rk = 0
-                for col in range(7, -1, -1):
-                    piv = next((i for i in range(rk, 8) if (m[i] >> col) & 1), None)
-                    if piv is None: continue
-                    m[rk], m[piv] = m[piv], m[rk]
-                    for i in range(8):
-                        if i != rk and (m[i] >> col) & 1:
-                            m[i] ^= m[rk]
-                    rk += 1
-                if rk == 8:
-                    return rows
-        rows = rand_mat()
-        body = f"""
-
-ROWS = {rows!r}
-OFF = {_r.randrange(256)}
-
-def _apply(x):
-    r = 0
-    for i, rw in enumerate(ROWS):
-        if (x >> i) & 1:
-            r ^= rw
-    return r ^ OFF
 
 MAP = [_apply(i) for i in range(256)]
-INV = [0]*256
-for _i, _v in enumerate(MAP):
-    INV[_v] = _i
+
 
 def analyze(INPUT, PARAMETERS):
-    return {{"size": len(INPUT),
-            "data_b64": __import__("base64").b64encode(INPUT).decode()}}
+    # pure linear-algebra law over GF(2)^8 applied to the index byte
+    return {{"size": len(INPUT)}}
+
 
 def reconstruct(STATE, SIZE, PARAMETERS):
-    import base64
-    d = base64.b64decode(STATE["data_b64"])
-    return bytes(MAP[x] for x in d)[:SIZE]
+    abc_formula.ops(SIZE * 8)
+    return bytes(MAP[n & 0xFF] for n in range(SIZE))
+
 
 def read(STATE, OFFSET, LENGTH, PARAMETERS):
-    import base64
-    abc_formula.ops(LENGTH)
-    d = base64.b64decode(STATE["data_b64"])
-    return bytes(MAP[x] for x in d[OFFSET:OFFSET + LENGTH])
+    abc_formula.ops(LENGTH * 8)
+    return bytes(MAP[(OFFSET + i) & 0xFF] for i in range(LENGTH))
 """
         w(fid, f"gfaff-{si+1}", head + body, force)
 
